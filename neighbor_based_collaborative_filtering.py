@@ -1,5 +1,7 @@
 import re
 from itertools import chain
+
+import numpy as np
 from scipy import sparse
 from scipy.sparse import csr_matrix
 from tqdm import tqdm
@@ -49,7 +51,7 @@ class NeighborBasedCollaborativeFiltering:
         """
         return [item if isinstance(item, int) else self.tag2id[item] for item in items]
 
-    def build_neighbor_based_embedding(self):
+    def build_neighbor_based_embedding(self, alpha=2):
         self._get_tag2id()
 
         rows = []
@@ -66,11 +68,14 @@ class NeighborBasedCollaborativeFiltering:
                                            shape=(max(rows) + 1, self.num_songs + self.num_tags))
         self.item_user_matrix = self.user_item_matrix.T
 
+        norm = np.array(self.user_item_matrix.sum(axis=1).T, dtype=np.float32)
+        norm[norm == 0.] = np.inf
+        self.norm_inverse = csr_matrix(1 / np.power(norm, alpha))
+
     def get_base_embedding(self, uid):
         return self.user_item_matrix.dot(self.user_item_matrix[uid].T).T
 
-    def get_song_embedding(self, uid):
+    def get_song_embedding(self, uid, alpha=2):
         base_embedding = self.get_base_embedding(uid)
-        base_embeddings = sparse.vstack(base_embedding * (self.num_songs + self.num_tags))
-        song_embeddings = self.item_user_matrix.multiply(base_embeddings)
-        return song_embeddings
+        song_embeddings = base_embedding.multiply(self.item_user_matrix)  # elementwise
+        return self.norm_inverse.multiply(song_embeddings)

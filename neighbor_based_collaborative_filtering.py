@@ -1,10 +1,10 @@
 import re
+from tqdm import tqdm
 from itertools import chain
 
 import numpy as np
 from scipy import sparse
 from scipy.sparse import csr_matrix
-from tqdm import tqdm
 
 from Title_Based_Playlist_Generator import TagExtractor
 
@@ -51,7 +51,13 @@ class NeighborBasedCollaborativeFiltering:
         """
         return [item if isinstance(item, int) else self.tag2id[item] for item in items]
 
-    def build_neighbor_based_embedding(self, alpha=2):
+    def build_csr_matrix(self):
+        """
+        :param alpha: control the influence of long playlist , 0 <= alpha <= 1
+        """
+
+        print('Build user-item matrix ...')
+
         self._get_tag2id()
 
         rows = []
@@ -63,19 +69,20 @@ class NeighborBasedCollaborativeFiltering:
 
         scores = [1] * len(rows)
 
-        print('Build user-item matrix ...')
         self.user_item_matrix = csr_matrix((scores, (rows, columns)),
                                            shape=(max(rows) + 1, self.num_songs + self.num_tags))
         self.item_user_matrix = self.user_item_matrix.T
 
-        norm = np.array(self.user_item_matrix.sum(axis=1).T, dtype=np.float32)
-        norm[norm == 0.] = np.inf
-        self.norm_inverse = csr_matrix(1 / np.power(norm, alpha))
+        self.norm = np.array(self.item_user_matrix.sum(axis=0), dtype=np.float32)
+        self.norm[self.norm == 0.] = np.inf
+
+    def get_norm_inversed(self, power = 1):
+        return csr_matrix(np.power(self.norm, -power)
 
     def get_base_embedding(self, uid):
         return self.user_item_matrix.dot(self.user_item_matrix[uid].T).T
 
-    def get_song_embedding(self, uid, alpha=2):
+    def get_item_embeddings(self, uid, alpha = 0.5):
         base_embedding = self.get_base_embedding(uid)
-        song_embeddings = base_embedding.multiply(self.item_user_matrix)  # elementwise
-        return self.norm_inverse.multiply(song_embeddings)
+        item_embeddings = base_embedding.multiply(self.item_user_matrix)  # elementwise
+        return self.get_norm_inversed(power = alpha).multiply(item_embeddings) # elementwise

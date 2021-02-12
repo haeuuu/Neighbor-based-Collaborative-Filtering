@@ -1,10 +1,11 @@
 import re
 from tqdm import tqdm
-from itertools import chain
+from itertools import chain, islice
 
 import numpy as np
 from scipy import sparse
 from scipy.sparse import csr_matrix
+from sklearn.svm import LinearSVC
 
 from Title_Based_Playlist_Generator import TagExtractor
 
@@ -17,6 +18,7 @@ class NeighborBasedCollaborativeFiltering:
         self.train = load_json(train_path)
         self.val = load_json(val_path)
         self.data = load_json(train_path) + load_json(val_path)
+        self.svc = {}
 
         print('Build Vocab ...')
         self.build_vocab(limit)
@@ -51,6 +53,9 @@ class NeighborBasedCollaborativeFiltering:
         """
         return [item if isinstance(item, int) else self.tag2id[item] for item in items]
 
+    def get_raw_id(self, items):
+        return [iid if iid < self.num_songs else self.id2tag[iid] for iid in items]
+
     def build_csr_matrix(self):
         """
         :param alpha: control the influence of long playlist , 0 <= alpha <= 1
@@ -76,22 +81,21 @@ class NeighborBasedCollaborativeFiltering:
         self.norm = np.array(self.item_user_matrix.sum(axis=0), dtype=np.float32)
         self.norm[self.norm == 0.] = np.inf
 
-    def get_norm_inversed(self, power = 1):
+    def get_norm_inversed(self, power=1):
         return csr_matrix(np.power(self.norm, -power))
 
     def get_base_embedding(self, uid):
         return self.user_item_matrix.dot(self.user_item_matrix[uid].T).T
 
-    def get_item_embeddings(self, uid, alpha = 0.5):
+    def get_item_embeddings(self, uid, alpha=0.5):
         base_embedding = self.get_base_embedding(uid)
         item_embeddings = base_embedding.multiply(self.item_user_matrix)  # elementwise
-        return self.get_norm_inversed(power = alpha).multiply(item_embeddings) # elementwise
+        return self.get_norm_inversed(power=alpha).multiply(item_embeddings)  # elementwise
 
-    def build_rating_matrix(self, uid, alpha = 0.5, beta = 0.5):
+    def get_rating_matrix(self, uid, alpha=0.5, beta=0.5):
 
         # 1 ) uid에 대한 item embedding 생성
-        item_embeddings = self.get_item_embeddings(uid, alpha = alpha)
-
+        item_embeddings = self.get_item_embeddings(uid, alpha=alpha)
 
         # 2 ) uid가 소비한 item만 embedding 추출해놓기
         preferred_iids = self._get_inner_id(self.corpus[uid])
@@ -101,13 +105,51 @@ class NeighborBasedCollaborativeFiltering:
         simliarity_nominator = item_embeddings.dot(preferred_item_embeddings.T)
 
         # 4 ) beta에 맞는 norm 계산
-        norm_per_user = np.power(self.item_user_matrix.sum(axis = 1), beta)
-        norm_preferred = np.power(self.item_user_matrix[preferred_iids].sum(axis = 1),1-beta)
-        simliarity_denominator = norm_per_user*norm_preferred.T.astype('float')
+        norm_per_user = np.power(self.item_user_matrix.sum(axis=1), beta)
+        norm_preferred = np.power(self.item_user_matrix[preferred_iids].sum(axis=1), 1 - beta)
+        simliarity_denominator = norm_per_user * norm_preferred.T.astype('float')
         simliarity_denominator[simliarity_denominator == 0] = np.inf
 
         # 5 ) rating matrix 및 최종 r{j} 계산
-        rating_matrix = simliarity_nominator/simliarity_denominator
-        rating_per_item = rating_matrix.sum(axis = 1)
+        rating_matrix = simliarity_nominator / simliarity_denominator
+        rating_per_item = rating_matrix.sum(axis=1)
 
-        return rating_per_item
+        # 6 ) SVC 적합을 위한 label
+        labels = np.zeros(self.num_songs + self.num_tags)
+        labels[preferred_iids] = 1
+
+        return rating_per_item, labels
+
+    def trainSVC(self, uid=None, alpha=0.5, beta=0.5,
+                 regularization=0.5, dual=True, tolerance=1e-6, class_weight={0: 1, 1: 1}, max_iter=360000):
+
+        """
+        Train Support Vector Classifier (given user id)
+        tolerance : Select the algorithm to either solve the dual or primal optimization problem.
+                    Prefer dual=False when n_samples > n_features.
+        """
+
+        print('Train SVC ...')
+
+        if uid is not None:
+            train_uid = [uid]
+        else:
+            train_uid = self.corpus.key()
+
+        for uid in tqdm(train_uid):
+            # train
+            rating, labels = self.get_rating_matrix(uid, alpha=alpha, beta=beta)
+            classifier = LinearSVC(C=regularization, dual=dual, tol=tolerance, class_weight=class_weight,
+                                   max_iter=max_iter)
+            classifier.fit(rating, labels)
+
+            # prediction
+            predictions = (-1) * classifier.decision_function(rating)
+            self.svc[uid] = {'model': classifier, 'predictions': predictions}
+
+if __name__ == '__main__':
+    model = NeighborBasedCollaborativeFiltering(train_path, val_que_path)
+    model.build_csr_matrix()
+
+    model.trainSVC(uid = 147668)
+    songs, tags = model.recommend(uid = 147668)

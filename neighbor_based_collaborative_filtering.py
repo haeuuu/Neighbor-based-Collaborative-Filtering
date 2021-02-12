@@ -77,7 +77,7 @@ class NeighborBasedCollaborativeFiltering:
         self.norm[self.norm == 0.] = np.inf
 
     def get_norm_inversed(self, power = 1):
-        return csr_matrix(np.power(self.norm, -power)
+        return csr_matrix(np.power(self.norm, -power))
 
     def get_base_embedding(self, uid):
         return self.user_item_matrix.dot(self.user_item_matrix[uid].T).T
@@ -86,3 +86,28 @@ class NeighborBasedCollaborativeFiltering:
         base_embedding = self.get_base_embedding(uid)
         item_embeddings = base_embedding.multiply(self.item_user_matrix)  # elementwise
         return self.get_norm_inversed(power = alpha).multiply(item_embeddings) # elementwise
+
+    def build_rating_matrix(self, uid, alpha = 0.5, beta = 0.5):
+
+        # 1 ) uid에 대한 item embedding 생성
+        item_embeddings = self.get_item_embeddings(uid, alpha = alpha)
+
+
+        # 2 ) uid가 소비한 item만 embedding 추출해놓기
+        preferred_iids = self._get_inner_id(self.corpus[uid])
+        preferred_item_embeddings = item_embeddings[preferred_iids]
+
+        # 3 ) dot product로 <s{i},s{j}> 계산
+        simliarity_nominator = item_embeddings.dot(preferred_item_embeddings.T)
+
+        # 4 ) beta에 맞는 norm 계산
+        norm_per_user = np.power(self.item_user_matrix.sum(axis = 1), beta)
+        norm_preferred = np.power(self.item_user_matrix[preferred_iids].sum(axis = 1),1-beta)
+        simliarity_denominator = norm_per_user*norm_preferred.T.astype('float')
+        simliarity_denominator[simliarity_denominator == 0] = np.inf
+
+        # 5 ) rating matrix 및 최종 r{j} 계산
+        rating_matrix = simliarity_nominator/simliarity_denominator
+        rating_per_item = rating_matrix.sum(axis = 1)
+
+        return rating_per_item

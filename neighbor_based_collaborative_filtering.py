@@ -147,6 +147,16 @@ class NeighborBasedCollaborativeFiltering:
             predictions = (-1) * classifier.decision_function(rating)
             self.svc[uid] = {'model': classifier, 'predictions': predictions}
 
+    def recommend(self, uid):
+        recommend = np.argpartition(self.svc[uid]['predictions'], 1000)
+        already_seen = self.user_item_matrix[uid].toarray()[0]
+
+        rec_songs = list(islice((iid for iid in recommend if not already_seen[iid] and iid < self.num_songs), 100))
+        rec_tags = self.get_raw_id(
+            islice((iid for iid in recommend if not already_seen[iid] and iid >= self.num_songs), 10))
+
+        return rec_songs, rec_tags
+
 if __name__ == '__main__':
     model = NeighborBasedCollaborativeFiltering(train_path, val_que_path)
     model.build_csr_matrix()

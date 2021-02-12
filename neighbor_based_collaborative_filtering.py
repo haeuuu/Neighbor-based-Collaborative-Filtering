@@ -1,4 +1,5 @@
 import re
+import time
 from tqdm import tqdm
 from itertools import chain, islice
 
@@ -7,7 +8,11 @@ from scipy import sparse
 from scipy.sparse import csr_matrix
 from sklearn.svm import LinearSVC
 
+from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures
+
 from Title_Based_Playlist_Generator import TagExtractor
+
 
 class NeighborBasedCollaborativeFiltering:
     def __init__(self, train_path, val_path, limit=2):
@@ -120,32 +125,40 @@ class NeighborBasedCollaborativeFiltering:
 
         return rating_per_item, labels
 
-    def trainSVC(self, uid=None, alpha=0.5, beta=0.5,
-                 regularization=0.5, dual=True, tolerance=1e-6, class_weight={0: 1, 1: 1}, max_iter=360000):
+    def _train_given_user(self, uid, alpha=0.5, beta=0.5, regularization=0.5,
+                          dual=True, tolerance=1e-6, class_weight={0: 1, 1: 1}, max_iter=360000):
 
         """
-        Train Support Vector Classifier (given user id)
-        tolerance : Select the algorithm to either solve the dual or primal optimization problem.
-                    Prefer dual=False when n_samples > n_features.
+        Train Support Vector Classifier (single user)
+        """
+
+        rating, labels = self.get_rating_matrix(uid, alpha=alpha, beta=beta)
+        classifier = LinearSVC(C=regularization, dual=dual, tol=tolerance, class_weight=class_weight, max_iter=max_iter)
+        classifier.fit(rating, labels)
+
+        predictions = (-1) * classifier.decision_function(rating)
+        self.svc[uid] = {'model': classifier, 'predictions': predictions}
+
+    def trainSVC(self, alpha=0.5, beta=0.5, regularization=0.5,
+                 dual=True, tolerance=1e-6, class_weight={0: 1, 1: 1}, max_iter=360000):
+
+        """
+        Train Support Vector Classifier (all user)
         """
 
         print('Train SVC ...')
+        start = time.time()
+        with ThreadPoolExecutor() as exe:
+            results = [exe.submit(self._train_given_user, uid
+                                  , alpha, beta, regularization, dual, tolerance
+                                  , class_weight, max_iter) for uid in self.corpus.keys()]
 
-        if uid is not None:
-            train_uid = [uid]
-        else:
-            train_uid = self.corpus.key()
+            for Future_obj in concurrent.futures.as_completed(results):
+                Future_obj.result()
+                if len(self.svc) % 50 == 0:
+                    print(f'\tFit {len(self.svc)}-th model ... {(time.time() - start) // 60} min')
 
-        for uid in tqdm(train_uid):
-            # train
-            rating, labels = self.get_rating_matrix(uid, alpha=alpha, beta=beta)
-            classifier = LinearSVC(C=regularization, dual=dual, tol=tolerance, class_weight=class_weight,
-                                   max_iter=max_iter)
-            classifier.fit(rating, labels)
-
-            # prediction
-            predictions = (-1) * classifier.decision_function(rating)
-            self.svc[uid] = {'model': classifier, 'predictions': predictions}
+        print(f'Completed : {(time.time() - start) // 60} min')
 
     def recommend(self, uid):
         recommend = np.argpartition(self.svc[uid]['predictions'], 1000)
@@ -161,5 +174,5 @@ if __name__ == '__main__':
     model = NeighborBasedCollaborativeFiltering(train_path, val_que_path)
     model.build_csr_matrix()
 
-    model.trainSVC(uid = 147668)
+    model.trainSVC()
     songs, tags = model.recommend(uid = 147668)

@@ -13,7 +13,6 @@ import concurrent.futures
 
 from Title_Based_Playlist_Generator import TagExtractor
 
-
 class NeighborBasedCollaborativeFiltering:
     def __init__(self, train_path, val_path, limit=2):
         """
@@ -22,6 +21,7 @@ class NeighborBasedCollaborativeFiltering:
         """
         self.train = load_json(train_path)
         self.val = load_json(val_path)
+        self.val_ids = [ply['id'] for ply in self.val]
         self.data = load_json(train_path) + load_json(val_path)
         self.svc = {}
 
@@ -139,7 +139,7 @@ class NeighborBasedCollaborativeFiltering:
         predictions = (-1) * classifier.decision_function(rating)
         self.svc[uid] = {'model': classifier, 'predictions': predictions}
 
-    def trainSVC(self, alpha=0.5, beta=0.5, regularization=0.5,
+    def trainSVC(self, alpha=0.9, beta=0.7, regularization=0.5,
                  dual=True, tolerance=1e-6, class_weight={0: 1, 1: 1}, max_iter=360000):
 
         """
@@ -151,7 +151,7 @@ class NeighborBasedCollaborativeFiltering:
         with ThreadPoolExecutor() as exe:
             results = [exe.submit(self._train_given_user, uid
                                   , alpha, beta, regularization, dual, tolerance
-                                  , class_weight, max_iter) for uid in self.corpus.keys()]
+                                  , class_weight, max_iter) for uid in self.val_ids]
 
             for Future_obj in concurrent.futures.as_completed(results):
                 Future_obj.result()
